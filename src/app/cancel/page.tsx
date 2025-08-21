@@ -59,6 +59,17 @@ export default async function CancelPage() {
       {variant === 'B' && <div>Downsell: <b>{dollars(offer)}</b> (–$10)</div>}
       <div>Status now: <b>{sub.status === 'active' ? 'active' : 'pending_cancellation'}</b></div>
       <p className="text-sm opacity-70">Reloading should not create new rows or change the variant.</p>
+
+      {/* ✅ Continue button now inside the component */}
+      <a
+        href="/cancel/reason"
+        className="inline-flex items-center px-4 py-2 rounded-md border border-gray-300 hover:bg-gray-50 text-sm"
+      >
+        Continue → Reason
+      </a>
     </main>
   );
 }
+
+
+
