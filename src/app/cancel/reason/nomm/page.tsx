@@ -3,71 +3,51 @@ import { redirect } from 'next/navigation';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { MOCK_USER_ID } from '@/lib/mockUser';
 import { verifyCsrfToken } from '@/lib/csrf';
-import CsrfField from '@/components/CsrfField';
 import VisaForm from './VisaForm';
 
-function sanitize(s: string, max = 300) {
-  const safe = s.replace(/[<>&"`]/g, '');
-  return safe.length > max ? safe.slice(0, max) : safe;
-}
-
-// Server action: save yes/no + optional text, then finish
-async function complete(formData: FormData) {
+// server action -> save and branch to final page
+async function completeNoMM(formData: FormData) {
   'use server';
   const csrf = String(formData.get('csrf') || '');
-  const reason = String(formData.get('reason') || ''); // 'visa_yes' | 'visa_no'
-  const visaText = String(formData.get('visa_text') || '');
-
   if (!verifyCsrfToken(csrf)) throw new Error('Invalid CSRF token');
-  if (!['visa_yes', 'visa_no'].includes(reason)) throw new Error('Invalid reason');
+
+  const reason = String(formData.get('reason') || ''); // 'visa_yes' | 'visa_no'
+  const visaInfo = String(formData.get('visa_info') || '').replace(/[<>&"`]/g, '').slice(0, 200);
+
+  if (reason !== 'visa_yes' && reason !== 'visa_no') throw new Error('Invalid reason');
 
   const userId = MOCK_USER_ID;
 
   const { data: sub } = await supabaseAdmin
-    .from('subscriptions')
-    .select('id')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .from('subscriptions').select('id').eq('user_id', userId)
+    .order('created_at', { ascending: false }).limit(1).maybeSingle();
   if (!sub) return redirect('/cancel');
 
   const { data: can } = await supabaseAdmin
-    .from('cancellations')
-    .select('id, reason_details')
-    .eq('subscription_id', sub.id)
-    .maybeSingle();
+    .from('cancellations').select('id, reason_details')
+    .eq('subscription_id', sub.id).maybeSingle();
   if (!can) return redirect('/cancel');
 
-  const appended =
-    (can.reason_details ? can.reason_details + ' | ' : '') +
-    `reason=${reason}${visaText ? `; visa=${sanitize(visaText)}` : ''}`;
+  const details = (can.reason_details ? can.reason_details + ' | ' : '') + `visa:${reason}; ${visaInfo}`;
+  await supabaseAdmin.from('cancellations').update({
+    reason,
+    reason_details: visaInfo ? details : can.reason_details ?? null,
+    accepted_downsell: false,
+  }).eq('id', can.id);
 
-  await supabaseAdmin
-    .from('cancellations')
-    .update({ reason, reason_details: appended, accepted_downsell: false })
-    .eq('id', can.id);
-
-  redirect('/cancel/confirm');
+  redirect(reason === 'visa_no' ? '/cancel/final/help' : '/cancel/final/none');
 }
 
 export default async function Page() {
   const userId = MOCK_USER_ID;
 
   const { data: sub } = await supabaseAdmin
-    .from('subscriptions')
-    .select('id')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .from('subscriptions').select('id').eq('user_id', userId)
+    .order('created_at', { ascending: false }).limit(1).maybeSingle();
   if (!sub) return redirect('/cancel');
 
   const { data: can } = await supabaseAdmin
-    .from('cancellations')
-    .select('id')
-    .eq('subscription_id', sub.id)
-    .maybeSingle();
+    .from('cancellations').select('id').eq('subscription_id', sub.id).maybeSingle();
   if (!can) return redirect('/cancel');
 
   return (
@@ -101,10 +81,14 @@ export default async function Page() {
                 Even if it wasn’t through Migrate Mate, let us help get your visa sorted.
               </p>
 
-              <VisaForm action={complete} />
+              <VisaForm
+                action={completeNoMM}
+                yesPrompt="What visa will you be applying for?"
+                noPrompt="We can connect you with one of our trusted partners. Which visa would you like to apply for?"
+              />
             </div>
 
-            {/* Right image */}
+            {/* Right image (no profile/avatar on this page) */}
             <div className="order-first lg:order-none">
               <Image
                 src="/img/main.jpg"

@@ -3,15 +3,19 @@
 import { useState } from 'react';
 import CsrfField from '@/components/CsrfField';
 
-export default function VisaForm({ action }: { action: (fd: FormData) => Promise<void> }) {
+export default function VisaForm({
+  action,
+  yesPrompt,
+  noPrompt,
+}: {
+  action: (fd: FormData) => Promise<void>;
+  yesPrompt: string;
+  noPrompt: string;
+}) {
   const [val, setVal] = useState<'visa_yes' | 'visa_no' | ''>('');
-  const [text, setText] = useState('');
+  const [visaInfo, setVisaInfo] = useState('');
 
-  const showText = !!val;
-  const isNo = val === 'visa_no';
-  const label = isNo
-    ? 'Which visa would you like to apply for?'
-    : 'What visa will you be applying for?';
+  const prompt = val === 'visa_yes' ? yesPrompt : noPrompt;
 
   return (
     <form action={action} className="mt-6 space-y-5">
@@ -47,20 +51,15 @@ export default function VisaForm({ action }: { action: (fd: FormData) => Promise
         </div>
       </fieldset>
 
-      {showText && (
+      {val && (
         <div>
-          {isNo && (
-            <p className="text-sm text-gray-700 mb-2">
-              We can connect you with one of our trusted partners.
-            </p>
-          )}
-          <label className="block text-sm text-gray-700 mb-1">{label}</label>
+          <label className="block text-sm text-gray-700 mb-2">{prompt}</label>
           <input
-            name="visa_text"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="e.g. Skilled Independent (subclass 189)"
-            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#8952fc] focus:border-[#8952fc]"
+            name="visa_info"
+            value={visaInfo}
+            onChange={(e) => setVisaInfo(e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#8952fc]"
+            placeholder="e.g. 482 Temporary Skill Shortage"
           />
         </div>
       )}
