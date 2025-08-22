@@ -1,4 +1,7 @@
 // src/app/cancel/why/page.tsx
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 import Image from 'next/image';
 import { redirect } from 'next/navigation';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
@@ -6,27 +9,25 @@ import { MOCK_USER_ID } from '@/lib/mockUser';
 import { verifyCsrfToken } from '@/lib/csrf';
 import CsrfField from '@/components/CsrfField';
 
-const REASONS = [
-  { id: 'too_expensive', label: 'Too expensive' },
-  { id: 'platform_not_helpful', label: 'Platform not helpful' },
-  { id: 'not_enough_jobs', label: 'Not enough relevant jobs' },
-  { id: 'decided_not_to_move', label: 'Decided not to move' },
-  { id: 'other', label: 'Other' },
-];
+type BucketA = '0' | '1-5' | '6-20' | '20+';
+type BucketB = '0' | '1-2' | '3-5' | '5-8' | '8+';
 
-function dollars(cents: number) { return `$${(cents / 100).toFixed(2)}`; }
-function sanitize(s: string, max = 500) {
-  const safe = s.replace(/[<>&"`]/g, '');
-  return safe.length > max ? safe.slice(0, max) : safe;
-}
-
-/** Green button: user changes mind and accepts the offer */
-async function acceptOffer(formData: FormData) {
+async function saveWhy(formData: FormData) {
   'use server';
   const csrf = String(formData.get('csrf') || '');
   if (!verifyCsrfToken(csrf)) throw new Error('Invalid CSRF token');
 
   const userId = MOCK_USER_ID;
+
+  const found_mm = String(formData.get('found_mm') || '');
+  const roles = String(formData.get('roles') || '0');
+  const emails = String(formData.get('emails') || '0');
+  const interviews = String(formData.get('interviews') || '0');
+
+  const yesNo = new Set(['yes', 'no']);
+  const bucketA = new Set(['0', '1-5', '6-20', '20+']);
+  const bucketB = new Set(['0', '1-2', '3-5', '5-8', '8+']);
+  if (!yesNo.has(found_mm)) throw new Error('Please choose Yes or No');
 
   const { data: sub } = await supabaseAdmin
     .from('subscriptions')
@@ -44,79 +45,23 @@ async function acceptOffer(formData: FormData) {
     .maybeSingle();
   if (!can) throw new Error('Cancellation row missing');
 
-  await supabaseAdmin
-    .from('cancellations')
-    .update({ accepted_downsell: true })
-    .eq('id', can.id);
+  const safeRoles: BucketA = (bucketA.has(roles) ? roles : '0') as BucketA;
+  const safeEmails: BucketA = (bucketA.has(emails) ? emails : '0') as BucketA;
+  const safeInterviews: BucketB = (bucketB.has(interviews) ? interviews : '0') as BucketB;
 
-  redirect('/cancel/accepted');
-}
-
-/** Gray button: complete cancellation, persist reason + details */
-async function complete(formData: FormData) {
-  'use server';
-  const csrf = String(formData.get('csrf') || '');
-  if (!verifyCsrfToken(csrf)) throw new Error('Invalid CSRF token');
-
-  const userId = MOCK_USER_ID;
-  const reason = String(formData.get('reason') || '');
-  const details = sanitize(String(formData.get('details') || ''));
-
-  if (!REASONS.some(r => r.id === reason)) {
-    // ensure a reason was selected
-    redirect('/cancel/why?err=reason');
-  }
-
-  const { data: sub } = await supabaseAdmin
-    .from('subscriptions')
-    .select('id')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!sub) throw new Error('Subscription not found');
-
-  const { data: can } = await supabaseAdmin
-    .from('cancellations')
-    .select('id')
-    .eq('subscription_id', sub.id)
-    .maybeSingle();
-  if (!can) throw new Error('Cancellation row missing');
+  const summary =
+    `found_via_mm=${found_mm}; roles_applied=${safeRoles}; emails_direct=${safeEmails}; interviews=${safeInterviews}`;
 
   await supabaseAdmin
     .from('cancellations')
-    .update({ reason, reason_details: details || null, accepted_downsell: false })
+    .update({ reason: 'found_job', reason_details: summary })
     .eq('id', can.id);
 
-  // Final screen
-  redirect('/cancel/confirm');
+  // Next step (visa question)
+  redirect('/cancel/reason');
 }
 
 export default async function WhyPage() {
-  const userId = MOCK_USER_ID;
-
-  // guards: only visit if there is an active cancellation flow
-  const { data: sub } = await supabaseAdmin
-    .from('subscriptions')
-    .select('id, monthly_price')
-    .eq('user_id', userId)
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (!sub) return redirect('/cancel');
-
-  const { data: can } = await supabaseAdmin
-    .from('cancellations')
-    .select('id, downsell_variant, accepted_downsell')
-    .eq('subscription_id', sub.id)
-    .maybeSingle();
-
-  if (!can) return redirect('/cancel/reason');         // didn’t start yet
-  if (can.accepted_downsell) return redirect('/cancel/accepted');
-
-  const base = sub.monthly_price;
-  const offer = Math.max(0, base - 1000);
-
   return (
     <main className="min-h-screen bg-gray-50 py-8 px-4">
       <div className="mx-auto w-full max-w-5xl">
@@ -124,7 +69,7 @@ export default async function WhyPage() {
           {/* Top bar */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
             <div className="text-sm text-gray-600">
-              <a href="/cancel/usage" className="inline-flex items-center gap-1 hover:underline">
+              <a href="/cancel" className="inline-flex items-center gap-1 hover:underline">
                 <span className="text-xl leading-none">&lsaquo;</span> Back
               </a>
             </div>
@@ -132,90 +77,104 @@ export default async function WhyPage() {
             <div className="text-sm text-gray-500">×</div>
           </div>
 
-          {/* Progress */}
-          <div className="flex items-center justify-between px-6 pt-4">
-            <div className="flex items-center gap-2">
-              <span className="h-2 w-8 rounded bg-green-500" />
-              <span className="h-2 w-8 rounded bg-green-500" />
-              <span className="h-2 w-8 rounded bg-green-500" />
-            </div>
-            <div className="text-xs text-gray-600">Step 3 of 3</div>
-          </div>
-
-          {/* Body */}
+          {/* Grid */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
-            {/* Left: reasons form */}
+            {/* Left */}
             <div className="order-2 lg:order-1">
               <h1 className="text-[22px] lg:text-[24px] font-semibold text-gray-900">
-                What’s the main reason for cancelling?
+                Congrats on the job! 🎉
               </h1>
-              <p className="mt-1 text-sm text-gray-700">
-                Please take a minute to let us know why:
+              <p className="mt-2 text-sm text-gray-700">
+                A couple quick questions to help us understand what worked:
               </p>
 
-              <form action={complete} className="mt-6 space-y-5">
+              <form action={saveWhy} className="mt-6 space-y-6">
                 <CsrfField />
 
-                <fieldset className="space-y-2">
-                  {REASONS.map(r => (
-                    <label key={r.id} className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="reason"
-                        value={r.id}
-                        className="h-4 w-4"
-                        required
-                      />
-                      <span className="text-sm text-gray-900">{r.label}</span>
+                {/* Found job via MM? */}
+                <fieldset>
+                  <label className="block text-sm text-gray-700 mb-2">
+                    Did you find your job through Migrate Mate?
+                  </label>
+                  <div className="flex gap-4">
+                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="found_mm" value="yes" className="h-4 w-4" required />
+                      <span className="text-sm">Yes</span>
                     </label>
-                  ))}
+                    <label className="inline-flex items-center gap-2 cursor-pointer">
+                      <input type="radio" name="found_mm" value="no" className="h-4 w-4" required />
+                      <span className="text-sm">No</span>
+                    </label>
+                  </div>
                 </fieldset>
 
-                {/* Free text (we keep it always visible to keep implementation simple) */}
-                <div className="mt-3">
-                  <label className="block text-sm text-gray-700 mb-1">
-                    Add more detail (optional)
+                {/* Roles applied via MM */}
+                <fieldset>
+                  <label className="block text-sm text-gray-700 mb-2">
+                    How many roles did you apply for through Migrate Mate?
                   </label>
-                  <textarea
-                    name="details"
-                    rows={4}
-                    className="w-full rounded-md border border-gray-300 p-3 text-sm"
-                    placeholder="What can we change to make the platform more helpful?"
-                  />
-                  <p className="text-xs text-gray-400 mt-1">Min 25 characters suggested (optional)</p>
-                </div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {['0','1-5','6-20','20+'].map(v => (
+                      <label key={v} className="cursor-pointer">
+                        <input type="radio" name="roles" value={v} className="peer sr-only" defaultChecked={v==='0'} />
+                        <div className="text-center text-sm py-2 rounded-md border bg-gray-50 peer-checked:bg-[#8952fc] peer-checked:text-white peer-checked:border-[#8952fc]">
+                          {v}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
 
-                {/* CTA row */}
-                <div className="flex flex-col gap-3 pt-2">
-                  {/* Green: second-chance discount */}
-                  <form action={acceptOffer}>
-                    <CsrfField />
-                    <button
-                      type="submit"
-                      className="w-full inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[#52d07b] text-white text-sm hover:opacity-90"
-                    >
-                      Get 50% off | {dollars(offer)}
-                    </button>
-                  </form>
+                {/* Companies emailed directly */}
+                <fieldset>
+                  <label className="block text-sm text-gray-700 mb-2">
+                    How many companies did you email directly?
+                  </label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {['0','1-5','6-20','20+'].map(v => (
+                      <label key={v} className="cursor-pointer">
+                        <input type="radio" name="emails" value={v} className="peer sr-only" defaultChecked={v==='0'} />
+                        <div className="text-center text-sm py-2 rounded-md border bg-gray-50 peer-checked:bg-[#8952fc] peer-checked:text-white peer-checked:border-[#8952fc]">
+                          {v}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
 
-                  {/* Gray: complete cancellation */}
-                  <button
-                    type="submit"
-                    className="w-full inline-flex items-center justify-center px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50"
-                  >
-                    Complete cancellation
-                  </button>
-                </div>
+                {/* Interviews */}
+                <fieldset>
+                  <label className="block text-sm text-gray-700 mb-2">
+                    How many different companies did you interview with?
+                  </label>
+                  <div className="grid grid-cols-5 gap-2">
+                    {['0','1-2','3-5','5-8','8+'].map(v => (
+                      <label key={v} className="cursor-pointer">
+                        <input type="radio" name="interviews" value={v} className="peer sr-only" defaultChecked={v==='0'} />
+                        <div className="text-center text-sm py-2 rounded-md border bg-gray-50 peer-checked:bg-[#8952fc] peer-checked:text-white peer-checked:border-[#8952fc]">
+                          {v}
+                        </div>
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <button
+                  type="submit"
+                  className="w-full inline-flex items-center justify-center px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50"
+                >
+                  Continue
+                </button>
               </form>
             </div>
 
-            {/* Right: image */}
+            {/* Right image */}
             <div className="order-1 lg:order-2">
               <Image
                 src="/img/main.jpg"
                 alt="City skyline"
-                width={768}
-                height={512}
+                width={800}
+                height={600}
                 className="w-full h-auto rounded-xl object-cover"
                 priority
               />
