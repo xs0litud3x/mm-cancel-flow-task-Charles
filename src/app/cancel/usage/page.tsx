@@ -1,16 +1,23 @@
-// src/app/cancel/downsell/page.tsx
+// src/app/cancel/usage/page.tsx
 import Image from 'next/image';
 import { redirect } from 'next/navigation';
 import { supabaseAdmin } from '@/lib/supabaseAdmin';
 import { MOCK_USER_ID } from '@/lib/mockUser';
 import { verifyCsrfToken } from '@/lib/csrf';
-import CsrfField from '@/components/CsrfField';
+import ReasonClient from './ReasonClient';
 
 function dollars(cents: number) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
-// Accept the downsell ($10 off) → mark accepted_downsell=true and go to /cancel/accepted
+function sanitize(s: string, max = 500) {
+  const safe = s.replace(/[<>&"`]/g, '');
+  return safe.length > max ? safe.slice(0, max) : safe;
+}
+
+// --- Server actions ---------------------------------------------------------
+
+// Green button: user changes mind and takes the discount
 async function acceptOffer(formData: FormData) {
   'use server';
   const csrf = String(formData.get('csrf') || '');
@@ -42,13 +49,16 @@ async function acceptOffer(formData: FormData) {
   redirect('/cancel/accepted');
 }
 
-// Decline the offer → go to the small usage survey at /cancel/usage
-async function declineOffer(formData: FormData) {
+// Grey button: continue to final confirmation, store reason + details
+async function continueCancel(formData: FormData) {
   'use server';
   const csrf = String(formData.get('csrf') || '');
   if (!verifyCsrfToken(csrf)) throw new Error('Invalid CSRF token');
 
   const userId = MOCK_USER_ID;
+
+  const reason = String(formData.get('reason') || '');
+  const detailsRaw = String(formData.get('details') || '');
 
   const { data: sub } = await supabaseAdmin
     .from('subscriptions')
@@ -64,18 +74,24 @@ async function declineOffer(formData: FormData) {
     .select('id')
     .eq('subscription_id', sub.id)
     .maybeSingle();
+  if (!can) throw new Error('Cancellation row missing');
 
-  if (can) {
-    await supabaseAdmin
-      .from('cancellations')
-      .update({ accepted_downsell: false })
-      .eq('id', can.id);
-  }
+  await supabaseAdmin
+    .from('cancellations')
+    .update({
+      accepted_downsell: false,
+      reason,
+      // for “too_expensive” we’ll save the number; for others we save the free text
+      reason_details: sanitize(detailsRaw),
+    })
+    .eq('id', can.id);
 
-  redirect('/cancel/usage');
+  redirect('/cancel/confirm');
 }
 
-export default async function DownsellPage() {
+// --- Page (server) ----------------------------------------------------------
+
+export default async function UsagePage() {
   const userId = MOCK_USER_ID;
 
   const { data: sub } = await supabaseAdmin
@@ -85,20 +101,20 @@ export default async function DownsellPage() {
     .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (!sub) return <main className="p-6">No subscription.</main>;
+  if (!sub) return redirect('/cancel');
 
   const { data: can } = await supabaseAdmin
     .from('cancellations')
-    .select('id, downsell_variant')
+    .select('id, downsell_variant, accepted_downsell')
     .eq('subscription_id', sub.id)
     .maybeSingle();
 
-  // Guards: only show this page when we have a cancellation and the variant is B
   if (!can) return redirect('/cancel/reason');
   if (can.downsell_variant !== 'B') return redirect('/cancel/confirm');
+  if (can.accepted_downsell) return redirect('/cancel/accepted');
 
   const base = sub.monthly_price;
-  const offer = Math.max(0, base - 1000); // $10 off per spec
+  const offer = Math.max(0, base - 1000);
 
   return (
     <main className="min-h-screen bg-gray-50 py-8 px-4">
@@ -107,7 +123,7 @@ export default async function DownsellPage() {
           {/* Top bar */}
           <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
             <div className="text-sm text-gray-600">
-              <a href="/cancel" className="inline-flex items-center gap-1 hover:underline">
+              <a href="/cancel/downsell" className="inline-flex items-center gap-1 hover:underline">
                 <span className="text-xl leading-none">&lsaquo;</span> Back
               </a>
             </div>
@@ -115,55 +131,42 @@ export default async function DownsellPage() {
             <div className="text-sm text-gray-500">×</div>
           </div>
 
+          {/* Progress */}
+          <div className="flex items-center justify-between px-6 pt-4">
+            <div className="flex items-center gap-2">
+              <span className="h-2 w-8 rounded bg-green-500" />
+              <span className="h-2 w-8 rounded bg-green-500" />
+              <span className="h-2 w-8 rounded bg-green-500" />
+            </div>
+            <div className="text-xs text-gray-600">Step 3 of 3</div>
+          </div>
+
           {/* Body */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
+            {/* Left column */}
             <div className="order-2 lg:order-1">
               <h1 className="text-[22px] lg:text-[24px] font-semibold text-gray-900">
-                We built this to help you land the job,
-                <br className="hidden lg:block" /> this makes it a little easier.
+                What’s the main reason for cancelling?
               </h1>
-              <p className="mt-2 text-sm text-gray-700">
-                We’ve been there and we’re here to help you.
+              <p className="mt-1 text-sm text-gray-600">
+                Please take a minute to let us know why:
               </p>
 
-              <div className="mt-4 rounded-lg border border-purple-200 p-4">
-                <div className="text-[14px] font-semibold">Here’s $10 off until you find a job.</div>
-                <div className="text-sm text-gray-700">
-                  {dollars(offer)}/month{' '}
-                  <span className="text-gray-400 line-through ml-1">{dollars(base)}</span>
-                </div>
-              </div>
-
-              <div className="mt-4 flex flex-col gap-3">
-                <form action={acceptOffer}>
-                  <CsrfField />
-                  <button
-                    type="submit"
-                    className="w-full inline-flex items-center justify-center px-4 py-2 rounded-lg bg-[#52d07b] text-white text-sm hover:opacity-90"
-                  >
-                    Get $10 off
-                  </button>
-                </form>
-
-                <form action={declineOffer}>
-                  <CsrfField />
-                  <button
-                    type="submit"
-                    className="w-full inline-flex items-center justify-center px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50"
-                  >
-                    No thanks
-                  </button>
-                </form>
-              </div>
+              {/* Client form section */}
+              <ReasonClient
+                offer={offer}
+                continueAction={continueCancel}
+                acceptAction={acceptOffer}
+              />
             </div>
 
+            {/* Right image */}
             <div className="order-1 lg:order-2">
               <Image
-                src="/img/main.jpg"          // public/img/main.jpg
+                src="/img/main.jpg"
                 alt="City skyline"
-                width={2240}                  // <-- required for string src
-                height={1260}
-                sizes="(min-width: 1024px) 50vw, 100vw"
+                width={800}
+                height={600}
                 className="w-full h-auto rounded-xl object-cover"
                 priority
               />
